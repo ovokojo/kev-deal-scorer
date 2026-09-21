@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dealscan — is it a deal?</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Deal<span>scan</span></h1>
+  <div id="mode-pill" class="pill">connecting…</div>
+</header>
+
+<main id="stage">
+  <div id="card" class="card">
+    <div class="cat" id="cat">🎧</div>
+    <h2 id="title"></h2>
+    <div class="price-row"><span id="price"></span><span id="cond"></span></div>
+    <p id="blurb" class="blurb"></p>
+    <p id="seller" class="seller"></p>
+
+    <div id="scoring" class="scoring hidden">
+      <div class="spinner"></div><span>asking the model…</span>
+    </div>
+
+    <div id="verdict" class="verdict hidden">
+      <div id="verdict-label" class="verdict-label"></div>
+      <div class="bars" id="bars"></div>
+      <div class="meta">
+        <span id="latency"></span>
+        <span id="confidence"></span>
+        <span id="redflag"></span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="controls">
+  <button id="skip" class="btn ghost">Skip</button>
+  <button id="next" class="btn primary">Next deal →</button>
+</div>
+<p class="hint">Drag the card, use ← → keys, or the buttons.</p>
+<p class="counter"><span id="idx">1</span> / <span id="total">–</span></p>
+
+<script src="app.js"></script>
+</body>
+</html>
