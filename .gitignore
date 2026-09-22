@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# gstack browse artifacts (screenshots, reports)
+.gstack/
+
+# macOS
+.DS_Store

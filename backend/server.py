@@ -30,8 +30,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/api/health":
+            kev = deal.kev_available()
             return self._send(200, json.dumps({
-                "kev": deal.kev_available(),
+                "kev": kev,
+                "run": deal.kev_run_name() if kev else None,
                 "products": len(PRODUCTS),
             }))
         if path == "/api/products":

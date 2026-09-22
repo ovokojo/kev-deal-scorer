@@ -67,19 +67,32 @@ def kev_available():
         return False
 
 
+def kev_run_name():
+    """Best-effort name of the loaded Kev checkpoint, e.g. 'jaredpalmer/kev-4b'."""
+    try:
+        with urllib.request.urlopen(KEV_MODELS_URL, timeout=2) as r:
+            info = json.loads(r.read().decode())
+        models = info.get("models") if isinstance(info, dict) else None
+        first = models[0] if isinstance(models, list) and models else {}
+        return first.get("run") or first.get("id") or None
+    except Exception:
+        return None
+
+
 def score_with_kev(product):
-    payload = json.dumps({
+    payload = {
         "state": product_state(product),
         "model": KEV_MODEL,
         "questions": build_questions(),
-    }).encode()
+    }
     req = urllib.request.Request(
-        KEV_URL, data=payload, headers={"content-type": "application/json"}
+        KEV_URL, data=json.dumps(payload).encode(),
+        headers={"content-type": "application/json"},
     )
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
         body = json.loads(r.read().decode())
-    latency_ms = int((time.time() - t0) * 1000)
+    round_trip_ms = int((time.time() - t0) * 1000)
 
     answers = body["answers"]
     verdict = answers["verdict"]
@@ -89,13 +102,28 @@ def score_with_kev(product):
 
     return {
         "mode": "kev",
-        "latency_ms": latency_ms,
+        "latency_ms": round_trip_ms,
         "verdict": verdict["choice"],
         "probabilities": verdict["probabilities"],
         "confidence": round(verdict.get("confidence", 0), 2),
         "value_score": round(value["score"], 2),
         "value_label": VALUE_LABELS[score_idx],
         "red_flag_prob": round(red["noul"], 2),
+        # full request/response trace for the educational lab page
+        "trace": {
+            "mode": "kev",
+            "request": {
+                "url": KEV_URL,
+                "model": KEV_MODEL,
+                "state": payload["state"],
+                "questions": payload["questions"],
+            },
+            "response": {"answers": answers, "usage": body.get("usage", {})},
+            "timing": {
+                "model_ms": body.get("latency_ms"),
+                "round_trip_ms": round_trip_ms,
+            },
+        },
     }
 
 
@@ -122,16 +150,50 @@ def score_demo(product):
 
     value_score = round(max(0.0, min(4.0, (1.3 - ratio) * 5)), 2)
     red_flag_prob = 0.85 if ratio < 0.35 else 0.05
+    confidence = round(max(probs.values()), 2)
+    elapsed_ms = int((time.time() - t0) * 1000)
+
+    # same answer shape Kev returns, so the lab page can treat both alike
+    answers = {
+        "verdict": {
+            "type": "choice", "choice": verdict,
+            "confidence": confidence, "probabilities": probs,
+        },
+        "value": {
+            "type": "score", "score": value_score,
+            "legend": {str(i): l for i, l in enumerate(VALUE_LABELS)},
+        },
+        "red_flags": {"type": "noul", "noul": red_flag_prob},
+    }
 
     return {
         "mode": "demo",
-        "latency_ms": int((time.time() - t0) * 1000),
+        "latency_ms": elapsed_ms,
         "verdict": verdict,
         "probabilities": probs,
-        "confidence": round(max(probs.values()), 2),
+        "confidence": confidence,
         "value_score": value_score,
         "value_label": VALUE_LABELS[max(0, min(4, int(round(value_score))))],
         "red_flag_prob": red_flag_prob,
+        "trace": {
+            "mode": "demo",
+            "request": {
+                "url": None,
+                "model": "heuristic (no Kev server on :8009)",
+                "state": product_state(product),
+                "questions": build_questions(),
+            },
+            "response": {
+                "answers": answers,
+                "usage": {},
+                "heuristic": {
+                    "ratio": round(ratio, 3),
+                    "rule": f"asking {ratio:.2f}x market price → {verdict}",
+                    "note": "price compared against market_price — no model involved",
+                },
+            },
+            "timing": {"model_ms": elapsed_ms, "round_trip_ms": elapsed_ms},
+        },
     }
 
 

@@ -1,9 +1,9 @@
 # Dealscan — "is it a deal?" scorer powered by Kev
 
 A visual proof of concept for a Jev-style **System One decision model** applied to
-online shopping: swipe through mock listings and the model instantly tells you
-whether each one is a great deal, a fair price, or a bad deal — with probabilities,
-not prose.
+online shopping: browse a standard storefront catalog and Kev evaluates each listing
+the moment it scrolls into view — a thinking state, then a verdict badge backed by
+probabilities, not prose.
 
 Built around [Kev](https://github.com/jaredpalmer/kev) (Jared Palmer's open-source
 Jev clone, Apache 2.0), which speaks TypeSafe's System One API: one request carries
@@ -14,12 +14,14 @@ single forward pass.
 
 ```
 ┌─────────────┐      POST /api/score       ┌──────────────────┐     POST /v1/systemone    ┌─────────────┐
-│  swipe UI   │ ─────────────────────────▶ │  backend/server  │ ────────────────────────▶ │ Kev :8009   │
+│ catalog UI  │ ─────────────────────────▶ │  backend/server  │ ────────────────────────▶ │ Kev :8009   │
 │ (frontend/) │ ◀───────────────────────── │  backend/deal.py │ ◀──────────────────────── │ (kev.serve) │
 └─────────────┘      verdict + probs       └──────────────────┘    Choice/Score/Noul     └─────────────┘
 ```
 
-Each listing is sent as `state`, with three questions asked in one pass:
+Cards enter a client-side scoring queue as they scroll into view (the Kev server
+answers one request at a time, so verdicts light up in sequence). Each listing is
+sent as `state`, with three questions asked in one pass:
 
 | Question | Type | What it answers |
 |---|---|---|
@@ -39,6 +41,16 @@ the header always shows which mode you're in.
 ```
 
 No dependencies — the backend is stdlib-only Python 3.
+
+### How Kev thinks — the lab page
+
+Open [http://127.0.0.1:8000/lab.html](http://127.0.0.1:8000/lab.html) with the real
+Kev server running (below). Same storefront, but every evaluation is a live
+System One run: an inspector panel walks through the six stages — the listing,
+the exact state string, the three typed questions, the single forward pass,
+the structured output verbatim, and the verdict + timing waterfall. Auto-follows
+each card as it scores; click any card to replay its run. Requires live Kev —
+until then it shows the start-up command and waits.
 
 ### Using the real model (recommended for the demo)
 
@@ -66,9 +78,9 @@ kev-deal-scorer/
 │   ├── server.py   # stdlib HTTP server: static frontend + /api/*
 │   └── deal.py     # System One request builder, Kev client, demo fallback
 ├── frontend/
-│   ├── index.html  # swipeable card UI (mobile-first)
+│   ├── index.html  # Shopify-style catalog grid (mobile-first)
 │   ├── styles.css
-│   └── app.js
+│   └── app.js      # scroll-triggered scoring queue, thinking states, verdicts
 ├── data/
 │   └── products.json  # 12 mock listings: great deals, fair prices, traps
 └── run.sh
@@ -76,7 +88,7 @@ kev-deal-scorer/
 
 ## API
 
-- `GET /api/health` → `{"kev": true, "products": 12}`
+- `GET /api/health` → `{"kev": true, "run": "jaredpalmer/kev-4b", "products": 12}`
 - `GET /api/products` → listing array
 - `POST /api/score` `{"id": "p4"}` → verdict, probabilities, value score, red-flag
   probability, latency, and `mode` (`"kev"` or `"demo"`)
@@ -85,5 +97,7 @@ kev-deal-scorer/
 
 - Swap the mock catalog for a real feed (eBay / Facebook Marketplace API).
 - Add a `choice` question that picks *which* listing to buy from a shortlist.
-- Threshold the confidence: only show the badge when confidence ≥ 0.6, else "not sure".
 - Try the hosted Jev API via the same SDK for a side-by-side calibration comparison.
+
+Already shipped: the confidence gate — badges appear only above 0.6 confidence,
+otherwise the card says "not sure" and hands the decision back to you.
