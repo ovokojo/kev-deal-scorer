@@ -3,41 +3,46 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>How Kev thinks — dealscan lab</title>
+<title>How it decides — dealscan lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body class="lab-page">
 
+<div class="announce" id="announce">
+  <div class="wrap">
+    <span class="dot"></span>
+    <span id="announce-text">Connecting to the model…</span>
+    <a href="/">← Back to the shop</a>
+  </div>
+</div>
+
 <header class="topbar">
-  <div class="topbar-inner">
-    <a class="logo" href="/">deal<span>scan</span></a>
-    <a class="navlink" href="/">← Catalog</a>
-    <div id="mode-pill" class="pill">
-      <span class="dot"></span><span id="mode-text">connecting…</span>
-    </div>
+  <div class="wrap">
+    <a class="logo" href="/">deal<em>scan</em></a>
+    <nav class="top-links"><a href="/">Shop</a></nav>
   </div>
 </header>
 
-<div class="subbar">
-  <div class="subbar-inner">
+<div class="toolbar">
+  <div class="wrap">
     <div class="chips" id="chips"></div>
-    <div class="sub-right">
-      <span id="queue-note" class="queue-note hidden"></span>
-      <button id="rescore" class="linkbtn" title="Clear all verdicts and let Kev evaluate again">↻ Re-score all</button>
+    <div class="tools">
+      <button id="rescore" class="chip" title="Clear all verdicts and let the model evaluate again">↻ Re-score all</button>
     </div>
   </div>
 </div>
 
 <main class="lab">
-  <section class="lab-catalog">
-    <div class="catalog-head">
-      <h1>How Kev thinks</h1>
-      <p class="count-line" id="count-line"></p>
-      <p class="subline">
-        The same storefront — but on this page, every evaluation is a live <strong>System&nbsp;One</strong> run.
-        As listings score, the panel on the right walks through exactly what the backend sent to Kev,
-        the typed answers that came back, and how long each step took. Click any scored card to replay its run.
-      </p>
+  <section>
+    <div class="lab-head">
+      <h1>How <span class="js-judge">the model</span> decides</h1>
+      <p>The same storefront, but every evaluation here is a live <strong>System One</strong> run.
+        As listings score, the inspector walks through exactly what the backend sent to the model,
+        the typed answers that came back, and how long each step took. Click any scored card to replay its run.</p>
+      <p class="results-line" id="results-line"></p>
     </div>
     <div class="grid" id="grid"></div>
     <p id="empty" class="empty hidden">No products match.</p>
@@ -55,19 +60,21 @@
     </div>
 
     <div class="gate" id="gate">
-      <h3>⏳ Waiting for a live Kev server</h3>
-      <p>This page only runs real lessons — no heuristic stand-in. Start the model
-      in another terminal (first run downloads the weights, ~8&nbsp;GB):</p>
-      <pre class="cmd">cd ~/Desktop/test/kev
-uv sync --extra serve
-KEV_DTYPE=bf16 uv run --extra serve \
-  python -m kev.serve \
-  --run jaredpalmer/kev-4b@qwen3 --port 8009</pre>
-      <p class="gate-status"><span class="spin"></span> polling 127.0.0.1:8009 every 3s…</p>
+      <h3>Waiting for a live model</h3>
+      <p>This page only runs real lessons, with no heuristic stand-in. Start an engine in another
+      terminal. Laya is the fast default; Kev is the generative-model baseline.</p>
+      <pre class="cmd">cd ~/Desktop/test/kev-deal-scorer/laya-server
+uv run serve.py --model ../models/laya-deals
+
+# or Kev 0.8B on the Apple GPU:
+cd ~/Desktop/test/kev
+KEV_DTYPE=bf16 uv run --extra serve python -m kev.serve \
+  --run jaredpalmer/kev-0.8b --port 8009</pre>
+      <p class="gate-status"><span class="spin"></span> polling for an engine every 3 s…</p>
     </div>
 
     <div class="stage" id="stage">
-      <p class="stage-wait">Scoring hasn’t started yet — scroll the catalog and the
+      <p class="stage-wait">Scoring hasn’t started yet. Scroll the catalog and the
       lesson will follow the first listing that gets evaluated.</p>
     </div>
 
@@ -78,8 +85,10 @@ KEV_DTYPE=bf16 uv run --extra serve \
 </main>
 
 <footer class="footer">
-  <p><strong>deal<span>scan</span></strong> lab — one forward pass answers all three questions.
-  State in, typed decisions out, probabilities attached.</p>
+  <div class="wrap">
+    <div><span class="logo">deal<em>scan</em></span>
+    <p>One request answers all three questions. State in, typed decisions out, probabilities attached.</p></div>
+  </div>
 </footer>
 
 <script src="catalog.js"></script>

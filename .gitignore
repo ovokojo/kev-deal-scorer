@@ -7,3 +7,10 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# model weights (regenerate with scripts/finetune_laya.py) and the laya-server venv
+models/
+laya-server/.venv/
+
+# raw benchmark predictions (docs/benchmark.md is the committed summary)
+runs/

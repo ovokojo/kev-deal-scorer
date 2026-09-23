@@ -3,56 +3,107 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Dealscan — every listing, evaluated as you browse</title>
+<title>dealscan — every listing, checked against its price history</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
+<div class="announce" id="announce">
+  <div class="wrap">
+    <span class="dot"></span>
+    <span id="announce-text">Connecting to the model…</span>
+    <a href="/lab.html">How <span class="js-judge">the model</span> decides →</a>
+  </div>
+</div>
+
 <header class="topbar">
-  <div class="topbar-inner">
-    <a class="logo" href="/">deal<span>scan</span></a>
-    <div class="search-wrap">
-      <svg class="search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.8"/>
-        <path d="M13.5 13.5 L17.5 17.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-      </svg>
-      <input id="search" type="search" placeholder="Search the catalog…" autocomplete="off">
-    </div>
-    <a class="navlink" href="/lab.html">How Kev thinks →</a>
-    <div id="mode-pill" class="pill">
-      <span class="dot"></span><span id="mode-text">connecting…</span>
-    </div>
+  <div class="wrap">
+    <a class="logo" href="/">deal<em>scan</em></a>
+    <label class="search">
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.8"/><path d="M13.5 13.5 17.5 17.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <input id="search" type="search" placeholder="Search headphones, chairs, consoles…" autocomplete="off" aria-label="Search listings">
+    </label>
+    <nav class="top-links">
+      <a href="/lab.html">The lab</a>
+      <button class="cart-btn" id="cart-btn" type="button" aria-label="Open cart">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 4h2l1.6 8.2a1.5 1.5 0 0 0 1.5 1.3h6.3a1.5 1.5 0 0 0 1.5-1.2L17 7H6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8.5" cy="16.5" r="1.2" fill="currentColor"/><circle cx="14.5" cy="16.5" r="1.2" fill="currentColor"/></svg>
+        <span class="lbl">Cart</span><span class="cart-count" id="cart-count">0</span>
+      </button>
+    </nav>
   </div>
 </header>
 
-<div class="subbar">
-  <div class="subbar-inner">
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">Resale &amp; open-box marketplace</p>
+      <h1>Every listing, <em>checked</em> before you fall for it.</h1>
+      <p class="lede">A decision model reads each listing the moment it reaches your screen, compares
+        the asking price with its 90-day history, and looks for the seller signals scams leave behind.
+        You get a verdict with probabilities, not a paragraph.</p>
+    </div>
+    <div class="tally" id="tally">
+      <div class="t-great"><b id="t-great">0</b><span>great deals</span></div>
+      <div><b id="t-fair">0</b><span>fair prices</span></div>
+      <div class="t-bad"><b id="t-bad">0</b><span>overpriced</span></div>
+      <div class="t-scam"><b id="t-scam">0</b><span>flagged</span></div>
+      <div class="tally-note" id="tally-note">Waiting for the first listing…</div>
+    </div>
+  </div>
+</section>
+
+<div class="toolbar">
+  <div class="wrap">
     <div class="chips" id="chips"></div>
-    <div class="sub-right">
-      <span id="queue-note" class="queue-note hidden"></span>
-      <button id="rescore" class="linkbtn" title="Clear all verdicts and let Kev evaluate again">↻ Re-score all</button>
+    <div class="tools">
+      <select class="select" id="sort" aria-label="Sort listings">
+        <option value="featured">Featured</option>
+        <option value="deal">Best deal first</option>
+        <option value="price-asc">Price: low to high</option>
+        <option value="price-desc">Price: high to low</option>
+      </select>
+      <label class="toggle"><input type="checkbox" id="hide-bad"><span class="sw"></span><span class="t-long">Hide overpriced &amp; flagged</span><span class="t-short">Hide bad &amp; flagged</span></label>
     </div>
   </div>
 </div>
 
 <main class="page">
-  <div class="catalog-head">
-    <h1>All products</h1>
-    <p class="count-line" id="count-line"></p>
-    <p class="subline">
-      Kev watches this catalog with you — each listing is evaluated the moment it appears on screen.
-      One forward pass answers three questions: <em>verdict</em>, <em>value</em>, <em>red flags</em>.
-    </p>
+  <div class="wrap">
+    <p class="results-line" id="results-line"></p>
+    <div class="grid" id="grid"></div>
+    <p id="empty" class="empty hidden">Nothing matches — try another category or turn off the filter.</p>
   </div>
-
-  <div class="grid" id="grid"></div>
-  <p id="empty" class="empty hidden">No products match.</p>
 </main>
 
 <footer class="footer">
-  <p><strong>deal<span>scan</span></strong> — a System One demo. Kev returns typed decisions with calibrated
-  probabilities, not prose. Badges appear only above 60% confidence; below that, Kev says “not sure”.</p>
+  <div class="wrap">
+    <div>
+      <span class="logo">deal<em>scan</em></span>
+      <p>A System One demo. The model returns typed decisions with probabilities. A verdict
+      shows only when its top probability clears 60%; below that the card says “not sure”.
+      A red-flag probability of 50% or more overrides the price verdict.</p>
+    </div>
+    <p class="credits" id="credits">Product photos from Unsplash.</p>
+  </div>
 </footer>
+
+<!-- product detail -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="pd" aria-label="Product details" aria-hidden="true">
+  <div class="drawer-head"><h2>Listing</h2><button class="x" data-close aria-label="Close">×</button></div>
+  <div class="drawer-body" id="pd-body"></div>
+  <div class="drawer-foot" id="pd-foot"></div>
+</aside>
+
+<!-- cart -->
+<aside class="drawer" id="cart" aria-label="Cart" aria-hidden="true">
+  <div class="drawer-head"><h2>Your cart</h2><button class="x" data-close aria-label="Close">×</button></div>
+  <div class="drawer-body" id="cart-body"></div>
+  <div class="drawer-foot" id="cart-foot"></div>
+</aside>
 
 <script src="catalog.js"></script>
 <script src="app.js"></script>

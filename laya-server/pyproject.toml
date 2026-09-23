@@ -1,0 +1,9 @@
+[project]
+name = "laya-server"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "laya-mlx>=0.2.0",
+    "uvicorn>=0.53.0",
+]

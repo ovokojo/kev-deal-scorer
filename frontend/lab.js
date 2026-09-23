@@ -1,8 +1,8 @@
-/* lab.js — the "How Kev thinks" lesson panel.
+/* lab.js — the "How it decides" lesson panel.
    Auto-follows live scoring runs and walks through the six stages of a real
-   System One request: listing → state → typed questions → one forward pass →
-   structured output → verdict + timing. Requires a live Kev server; the gate
-   card waits for :8009 and flips the page to live automatically. */
+   System One request: listing → state → typed questions → the model pass →
+   structured output → verdict + timing. Requires a live engine (Laya on :8010 or
+   Kev on :8009); the gate card polls and flips the page to live automatically. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,7 +10,7 @@ const STAGES = [
   { title: "The listing", render: renderListing },
   { title: "The state", render: renderState },
   { title: "Three typed questions", render: renderQuestions },
-  { title: "One forward pass", render: renderPass },
+  { title: "The model pass", render: renderPass },
   { title: "The structured output", render: renderOutput },
   { title: "Verdict + timing", render: renderVerdictTiming },
 ];
@@ -28,24 +28,33 @@ const lab = {
 
 /* ---------- boot ---------- */
 
+const deepLink = location.hash.slice(1) || null;   // /lab.html#p7 from the shop's product drawer
+
 renderDots();
 bindControls();
-Catalog.setPaused(true);       // no scoring until a live Kev server answers
+Catalog.setPaused(true);       // no scoring until a live engine answers
 Catalog.init({
-  els: {
-    chips: $("chips"),
-    search: $("search"),
-    countLine: $("count-line"),
-    rescore: $("rescore"),
-  },
+  els: { chips: $("chips"), results: $("results-line"), rescore: $("rescore") },
   onResult,
   onCardClick: (p) => { if (lab.runs[p.id]) { setAuto(false); loadRun(p.id); } },
+  onTally: (t) => {
+    $("results-line").textContent = t.scored
+      ? `${t.scored} of ${t.total} listings evaluated`
+      : `${t.total} listings · none evaluated yet`;
+  },
 });
 healthLoop();
 
 function onResult(product, result) {
   lab.runs[product.id] = { product, result };
   if (!lab.live) return;
+  if (product.id === deepLink && !lab.deepLinked) {
+    lab.deepLinked = true;
+    setAuto(false);
+    loadRun(product.id);
+    Catalog.cardEl(product.id).scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
+  }
   lab.pending.push(product.id);
   tryNext();
 }
@@ -55,22 +64,23 @@ function onResult(product, result) {
 async function healthLoop() {
   try {
     const h = await fetch("/api/health").then((r) => r.json());
-    setPill(h);
-    setLive(h.kev && !!h.run);
+    setAnnounce(h);
+    Catalog.setEngine(h);
+    setLive(h.engine !== "demo");
   } catch (e) { /* backend down — stay gated */ }
   setTimeout(healthLoop, lab.live ? 10000 : 3000);
 }
 
-function setPill(health) {
-  const pill = $("mode-pill"), text = $("mode-text");
-  pill.classList.remove("live", "demo");
-  if (health.kev) {
-    const short = (health.run || "kev").split("/").pop();
-    text.textContent = `Kev live · ${short}`;
-    pill.classList.add("live");
+function setAnnounce(h) {
+  const el = $("announce"), text = $("announce-text");
+  el.classList.remove("live", "demo");
+  const run = (h.run || "").split("/").pop();
+  if (h.engine === "demo") {
+    el.classList.add("demo");
+    text.innerHTML = "<b>No model running</b> · the lab waits for a live engine";
   } else {
-    text.textContent = "Demo mode · heuristic";
-    pill.classList.add("demo");
+    el.classList.add("live");
+    text.innerHTML = `<b>Model live</b> · <span class="mono">${esc(h.engine)} · ${esc(run)}</span>`;
   }
 }
 
@@ -83,6 +93,7 @@ function setLive(on) {
     lab.pending = [];
     Catalog.setPaused(false);
     Catalog.rescoreAll();       // everything re-scores with the real model
+    if (deepLink && Catalog.cardEl(deepLink)) Catalog.cardEl(deepLink).scrollIntoView({ block: "center" });
   } else {
     Catalog.setPaused(true);
   }
@@ -99,6 +110,8 @@ function tryNext() {
 }
 
 function loadRun(id) {
+  document.querySelectorAll(".card.on-stage").forEach((c) => c.classList.remove("on-stage"));
+  Catalog.cardEl(id).classList.add("on-stage");
   lab.current = id;
   lab.stage = 0;
   renderStage();
@@ -157,9 +170,16 @@ function renderStage() {
     return;
   }
   const s = STAGES[lab.stage];
-  const demoBanner = run.result.mode === "demo"
-    ? `<div class="demo-banner">⚠ Demo fallback answered this run — not Kev. Start the Kev server for real lessons.</div>`
-    : "";
+  const demoBanner = run.result.mode === "error"
+    ? `<div class="demo-banner">⚠ The model didn’t answer this run: ${esc(run.result.error || "")}</div>`
+    : run.result.mode === "demo"
+      ? `<div class="demo-banner">⚠ The heuristic answered this run, not a model.</div>`
+      : "";
+  if (run.result.mode === "error") {
+    stage.innerHTML = demoBanner;
+    renderDots();
+    return;
+  }
   stage.innerHTML = `
     <div class="stage-kicker">Stage ${lab.stage + 1} of ${STAGES.length} — ${esc(s.title)}</div>
     ${demoBanner}
@@ -170,7 +190,7 @@ function renderStage() {
   renderDots();
   $("run-label").textContent =
     `${run.product.title.slice(0, 44)}${run.product.title.length > 44 ? "…" : ""}` +
-    (run.result.mode === "kev" ? " · live Kev run" : " · demo fallback");
+    (run.result.mode === "live" ? ` · live ${run.result.engine} run` : " · heuristic");
   stage.scrollTop = 0;
 }
 
@@ -179,27 +199,28 @@ function renderStage() {
 function renderListing({ product: p }) {
   return `
     <div class="mini-product">
-      <div class="mini-media tint-0"><span class="emoji">${p.icon || "🛍️"}</span></div>
+      <img src="${esc(p.image)}" alt="">
       <div class="mini-info">
-        <div class="vendor">${esc(p.seller)}</div>
+        <span class="mini-meta">${esc(p.seller)} · ${p.seller_feedback}% positive</span>
         <strong>${esc(p.title)}</strong>
-        <span class="mini-meta">$${esc(String(p.price))} · ${esc(p.condition)} · ${esc(p.category || "")}</span>
+        <span class="mini-meta">${Catalog.money(p.price)} · ${esc(p.condition)} · ${esc(p.category)}</span>
       </div>
     </div>
-    <p class="explain">The shopper sees a listing. The backend turns it into a ticket for Kev.</p>
-    <div class="callout">🔒 The page knows this item’s typical market price
-    ($${esc(String(p.market_price))}) — but it is <strong>never sent</strong> to the model.
-    Kev has to judge the deal from its own knowledge, like a real shopper would.</div>`;
+    <p class="explain">The shopper sees a listing. The backend turns it into a ticket for the model.</p>
+    <div class="callout">The ticket includes the item’s <strong>90-day price history</strong>
+    (typical ${Catalog.money(p.typical_price)}, low ${Catalog.money(p.low_90d)}, high ${Catalog.money(p.high_90d)}),
+    the same numbers a deal tracker shows you. The model doesn’t have to remember what a
+    ${esc(p.category.toLowerCase())} item costs in 2026. It compares, and it reads the seller.</div>`;
 }
 
 function renderState({ result: r }) {
-  const st = r.trace.request.state;
+  const st = esc(r.trace.request.state).replace(/^(Price history.*)$/m, "<mark>$1</mark>");
   return `
-    <p class="explain">The backend flattens the listing into one text block — the
+    <p class="explain">The backend flattens the listing into one text block, the
     <strong>state</strong>. This string is everything the model will ever see.</p>
-    <pre class="code">${esc(st)}</pre>
+    <pre class="code">${st}</pre>
     <div class="callout">No chat history, no system prompt, no tools. Plain text in,
-    decisions out — that is the whole input contract.</div>`;
+    decisions out. That is the whole input contract.</div>`;
 }
 
 function renderQuestions({ result: r }) {
@@ -212,7 +233,7 @@ function renderQuestions({ result: r }) {
     } else if (q.type === "score") {
       crit = q.criteria.map((v, i) => `<li><b>${i}</b> — ${esc(v)}</li>`).join("");
     } else {
-      crit = `<li><b>yes</b> — flags present</li><li><b>no</b> — looks clean</li>`;
+      crit = `<li><b>true</b> — flags present</li><li><b>false</b> — looks clean</li>`;
     }
     return `
       <div class="q-card">
@@ -222,100 +243,112 @@ function renderQuestions({ result: r }) {
       </div>`;
   }).join("");
   return `
-    <p class="explain">Three typed questions ride along with the state — each with its
+    <p class="explain">Three typed questions ride along with the state, each with its
     own rubric. Every answer comes back as a number, never a sentence.</p>
     ${cards}
-    <div class="callout">The keys (<code>verdict</code>, <code>value</code>, <code>red_flags</code>) are ours —
-    the model never sees them. Only instructions and options reach it.</div>`;
+    <div class="callout">The keys (<code>verdict</code>, <code>value</code>, <code>red_flags</code>) are ours.
+    The model never sees them, only the instructions and options.</div>`;
 }
 
 function renderPass({ result: r }) {
   const usage = r.trace.response.usage || {};
   const inTok = usage.input_tokens != null ? usage.input_tokens : "–";
-  const outTok = usage.output_tokens != null ? usage.output_tokens : "–";
+  const branches = ["verdict · choice", "value · score", "red_flags · noul"].map((label) => `
+    <div class="flow-q">
+      <span class="flow-q-name">${label}</span>
+      <div class="flow-opts"><i></i><i></i><i></i></div>
+      <div class="flow-decide">${r.engine === "laya" ? "option markers" : "&lt;decide&gt;"}</div>
+    </div>`).join("");
+  const batch = r.trace.response.batch;
+
+  if (r.engine === "laya") {
+    return `
+      <div class="flow">
+        <div class="flow-head">one batched call · ${batch ? batch.batch_size * 3 : 3} sequences side by side</div>
+        <div class="flow-branches">${branches}</div>
+        <div class="flow-state">bidirectional encoder · ModernBERT-large, 421M<span class="tok">${inTok} input tokens across the three sequences</span></div>
+        <div class="flow-head">scorer head over each option marker · softmax → probabilities</div>
+      </div>
+      <p class="explain">Laya is an <strong>encoder</strong>, not a chat model. Each question is packed
+      with its options and the state into its own sequence, and every token sees every other one.
+      Nothing is generated. A small head scores each option marker and a softmax turns the scores into probabilities.</p>
+      <p class="explain">All three questions for ${batch ? `all ${batch.batch_size} listings on screen` : "this listing"} go through
+      the model in <strong>one batched call</strong>. That is why the shop can check a whole screen at once.</p>
+      <div class="chiplets">
+        <span class="chiplet">in: ${inTok} tokens</span><span class="chiplet">out: 0 tokens</span>
+        ${batch ? `<span class="chiplet">batch: ${batch.batch_size} listings</span>` : ""}
+      </div>`;
+  }
   return `
     <div class="flow">
-      <div class="flow-state">state — encoded <em>once</em><span class="tok">${inTok} input tokens</span></div>
-      <div class="flow-branches">
-        ${["verdict · choice", "value · score", "red_flags · noul"].map((label) => `
-          <div class="flow-q">
-            <span class="flow-q-name">${label}</span>
-            <div class="flow-opts"><i></i><i></i><i></i></div>
-            <div class="flow-decide">&lt;decide&gt;</div>
-          </div>`).join("")}
-      </div>
+      <div class="flow-state">state, encoded <em>once</em><span class="tok">${inTok} input tokens</span></div>
+      <div class="flow-branches">${branches}</div>
       <div class="flow-head">pointer head · softmax → probabilities</div>
     </div>
-    <p class="explain">The state and all three questions go into <strong>one token sequence</strong>.
-    An attention mask lets each question read the state — but never the other questions.</p>
+    <p class="explain">Kev puts the state and all three questions into <strong>one token sequence</strong>.
+    An attention mask lets each question read the state, but never the other questions.</p>
     <p class="explain">The pointer head scores every option against each question’s
-    <code>&lt;decide&gt;</code> token; a softmax turns scores into calibrated probabilities.
+    <code>&lt;decide&gt;</code> token, and a softmax turns the scores into probabilities.
     <strong>One forward pass, three answers.</strong></p>
-    <div class="chips">
-      <span class="chiplet">in: ${inTok} tokens</span>
-      <span class="chiplet">out: ${outTok} tokens</span>
-      <span class="chiplet">passes: 1</span>
-    </div>`;
+    <div class="chiplets"><span class="chiplet">in: ${inTok} tokens</span><span class="chiplet">passes: 1</span></div>`;
 }
 
 function renderOutput({ result: r }) {
   const answers = r.trace.response.answers || {};
-  const usage = r.trace.response.usage || {};
   const heur = r.trace.response.heuristic;
   return `
-    <p class="explain">What came back, verbatim — keyed by our question ids:</p>
+    <p class="explain">What came back, verbatim, keyed by our question ids:</p>
     <pre class="code json">${hi(JSON.stringify(answers, null, 2))}</pre>
-    ${heur ? `<div class="callout warn">Heuristic run: ${esc(heur.rule)} — ${esc(heur.note || "")}</div>` : ""}
-    <div class="chips">
-      ${usage.input_tokens != null ? `<span class="chiplet">usage: ${usage.input_tokens} in / ${usage.output_tokens} out</span>` : ""}
-      <span class="chiplet">types: choice + score + noul</span>
-    </div>
-    <div class="callout">Typed decisions with calibrated probabilities — the code consumes
-    them directly. No prose to parse, nothing to hallucinate.</div>`;
+    ${heur ? `<div class="callout warn">Heuristic run: ${esc(heur.rule)}. ${esc(heur.note || "")}</div>` : ""}
+    <div class="callout">Each engine reports its own <code>confidence</code> (Kev: rescaled top
+    probability; Laya: one minus normalised entropy). The shop ignores both and gates on the
+    <strong>top probability</strong>, so a 60% gate means the same thing whichever engine answered.</div>`;
 }
 
-function renderVerdictTiming({ product: p, result: r }) {
-  const probs = r.probabilities || {};
-  const winner = Object.entries(probs).sort((a, b) => b[1] - a[1])[0];
-  const badge = Catalog.VERDICT_BADGES[winner ? winner[0] : r.verdict] || r.verdict;
+function renderVerdictTiming({ result: r }) {
+  const d = Catalog.display(r);
   const confPct = Math.round(r.confidence * 100);
   const unsure = r.confidence < Catalog.CONFIDENCE_GATE;
+  const red = Math.round(r.red_flag_prob * 100);
 
   const t = r.trace.timing || {};
-  const total = t.round_trip_ms != null ? t.round_trip_ms : r.latency_ms;
-  const model = t.model_ms != null ? t.model_ms : total;
+  const batch = r.trace.response.batch;
+  const total = batch ? batch.batch_round_trip_ms : (t.round_trip_ms != null ? t.round_trip_ms : r.latency_ms);
+  const model = batch ? Math.round(batch.batch_model_ms) : (t.model_ms != null ? Math.round(t.model_ms) : total);
   const overhead = Math.max(0, total - model);
   const modelW = total > 0 ? Math.min(100, Math.round((model / total) * 100)) : 100;
 
-  const timingNote = r.mode === "kev"
-    ? `<p class="explain">“Model time” is Kev’s own measure of the forward pass; the rest is HTTP
-       and backend overhead. Chat-LLM baselines for the same judgment run thousands of ms.</p>`
-    : `<p class="explain">The heuristic answers in ~0 ms — which is why the catalog enforces a minimum
-       “thinking” time. Real Kev runs land in the 100–800 ms range on Apple Silicon.</p>`;
+  const timingNote = r.engine === "laya"
+    ? `<p class="explain">This listing was scored in a batch of ${batch ? batch.batch_size : 1}, so the bar is the
+       whole batch: <span class="mono">${model} ms</span> of model time for all of them, about
+       <span class="mono">${Math.round(t.model_ms)} ms</span> each.</p>`
+    : r.engine === "kev"
+      ? `<p class="explain">“Model” is Kev’s own measure of the forward pass. The rest is HTTP and backend overhead.</p>`
+      : `<p class="explain">The heuristic answers in about 0 ms because no model is involved.</p>`;
 
   return `
-    <p class="explain">The UI reads the structured answer directly:</p>
+    <p class="explain">The shop reads the structured answer directly:</p>
     <div class="final-badge">
-      <span class="badge ${r.verdict} ${unsure ? "" : "pop"}">${unsure ? "❓ Not sure" : badge}</span>
-      <span class="mini-meta">argmax of the probability distribution</span>
+      <span class="vchip ${d.cls} pop"><i></i>${d.label}</span>
+      <span class="mini-meta">${d.cls === "scam" ? "red flags ≥ 50% override the price verdict" : "argmax of the verdict distribution"}</span>
     </div>
     <div class="gate-meter">
       <div class="gm-bar"><span style="width:${confPct}%"></span><i class="gm-gate" title="confidence gate"></i></div>
-      <div class="gm-labels"><span>confidence ${confPct}%</span><span>gate 60%</span></div>
-      ${unsure ? `<p class="explain">Below the gate — the badge steps aside and hands this one to a human.</p>` : ""}
+      <div class="gm-labels"><span>top probability ${confPct}%</span><span>gate 60%</span></div>
+      ${unsure ? `<p class="explain">Below the gate. The badge steps aside and hands this one to a human.</p>` : ""}
     </div>
-    <div class="chips">
+    <div class="chiplets">
       <span class="chiplet">${esc(r.value_label)} (${Number(r.value_score).toFixed(1)}/4)</span>
-      <span class="chiplet${r.red_flag_prob >= 0.5 ? " alert" : ""}">red flags ${Math.round(r.red_flag_prob * 100)}%</span>
+      <span class="chiplet${red >= 50 ? " alert" : ""}">red flags ${red}%</span>
     </div>
     <p class="explain" style="margin-top:14px">How long it took, end to end:</p>
     <div class="wf">
       <span class="wf-model" style="width:${modelW}%">model ${model} ms</span>
       <span class="wf-net" style="width:${100 - modelW}%">+${overhead} ms</span>
     </div>
-    <div class="gm-labels"><span>Kev forward pass</span><span>total ${total} ms</span></div>
+    <div class="gm-labels"><span>${esc(r.engine)} ${batch ? "batch" : "forward pass"}</span><span>total ${total} ms</span></div>
     ${timingNote}
-    <div class="callout">That is the System One pitch: a fast, typed, calibrated judgment —
+    <div class="callout">That is the System One pitch: a fast, typed, calibrated judgment,
     cheap enough to run on every product your shopper scrolls past.</div>`;
 }
 

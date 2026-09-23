@@ -1,43 +1,63 @@
 /* catalog.js — shared storefront: product grid, scroll-triggered scoring queue,
-   verdict rendering. Used by both the catalog page (app.js) and the lab page
-   (lab.js). The Kev server answers one request at a time, so scoring runs
-   through a client-side FIFO: cards light up in sequence, like a register. */
+   verdict rendering, sort and filters. Used by the shop (app.js) and the lab (lab.js).
+
+   Scoring follows the engine. Laya (and the demo heuristic) answer a whole screen of
+   listings in one batched request, so visible cards are collected for a moment and sent
+   together. Kev answers one listing at a time, so cards go through a FIFO and light up
+   in sequence, like a register. */
 
 window.Catalog = (() => {
   let products = [];
-  const results = {};          // id -> score response (or {error}) once scored
-  const queued = new Set();    // ids waiting in or in the scoring queue
-  const scoreQueue = [];       // ids waiting to be scored (FIFO)
+  const results = {};          // id -> score response once scored
+  const queued = new Set();    // ids waiting for, or in, a scoring request
+  let pending = [];            // ids waiting to be sent
   let draining = false;
-  let paused = false;          // lab page gates scoring until Kev is live
+  let flushTimer = null;
+  let paused = false;          // the lab gates scoring until a live engine answers
+  let batchMode = true;
   let hooks = {};
   let els = {};
 
+  let judge = "the model";      // whoever is answering: Laya, Kev, or the heuristic
   let activeCategory = "all";
   let searchText = "";
+  let sortKey = "featured";
+  let hideBad = false;
 
-  const VERDICT_BADGES = {
-    great_deal: "🔥 Great deal",
-    fair_price: "🤝 Fair price",
-    bad_deal: "🚫 Bad deal",
+  const CONFIDENCE_GATE = 0.6;  // top probability below this → "not sure"
+  const RED_FLAG_GATE = 0.5;    // red-flag probability at or above this → "likely scam"
+  const BATCH_MAX = 30;
+  const MIN_REVEAL_MS = 250;    // batched answers land in ~0.1 s; give the reveal a beat
+
+  const LABELS = {
+    great_deal: "Great deal",
+    fair_price: "Fair price",
+    bad_deal: "Overpriced",
+    scam: "Likely scam",
+    unsure: "Not sure",
+    error: "Scorer error",
+    checking: "Checking",
   };
-  const BAR_LABELS = { great_deal: "Great", fair_price: "Fair", bad_deal: "Bad" };
-  const BAR_ORDER = ["great_deal", "fair_price", "bad_deal"];
-  const THINK_STEPS = [
-    "Reading the listing…",
-    "Judging price vs. market…",
-    "Scanning for red flags…",
-    "Calibrating confidence…",
-  ];
-  const CONFIDENCE_GATE = 0.6;   // below this, show "not sure" instead of a badge
+  const VERDICT_BADGES = LABELS;  // the lab page reads this name
+  const ORDER = ["great_deal", "fair_price", "bad_deal"];
+
+  /* What the shopper is shown for a result. The scam flag overrides the price verdict:
+     a $39 AirPods listing is not a "great deal" if it is probably not real. */
+  function display(r) {
+    if (!r) return { cls: "checking", label: LABELS.checking };
+    if (r.mode === "error" || r.error) return { cls: "error", label: LABELS.error };
+    if (r.red_flag_prob >= RED_FLAG_GATE) return { cls: "scam", label: LABELS.scam };
+    if (r.confidence < CONFIDENCE_GATE) return { cls: "unsure", label: LABELS.unsure };
+    return { cls: r.verdict, label: LABELS[r.verdict] };
+  }
 
   /* ---------- init ---------- */
 
   async function init(opts = {}) {
     hooks = opts;
     els = opts.els || {};
-    const res = await fetch("/api/products");
-    products = await res.json();
+    if (opts.health) setEngine(opts.health);
+    products = await fetch("/api/products").then((r) => r.json());
 
     renderGrid();
     if (els.chips) renderChips();
@@ -45,14 +65,25 @@ window.Catalog = (() => {
       searchText = e.target.value.trim().toLowerCase();
       applyFilters();
     });
+    if (els.sort) els.sort.addEventListener("change", (e) => { sortKey = e.target.value; applySort(); });
+    if (els.hide) els.hide.addEventListener("change", (e) => { hideBad = e.target.checked; applyFilters(); });
     if (els.rescore) els.rescore.onclick = () => rescoreAll();
+    applyFilters();
 
-    updateTally();
-
-    const io = new IntersectionObserver(onVisible, { rootMargin: "220px", threshold: 0.05 });
+    const io = new IntersectionObserver(onVisible, { rootMargin: "200px", threshold: 0.05 });
     products.forEach((p) => io.observe(cardEl(p.id)));
-
     return products;
+  }
+
+  function setEngine(health) {
+    batchMode = health.engine !== "kev";
+    judge = health.engine === "laya" ? "Laya" : health.engine === "kev" ? "Kev" : "the model";
+    document.querySelectorAll(".js-judge").forEach((el) => (el.textContent = judge));
+    // cards that already say "<engine> is checking…" should follow a mid-session switch
+    products.forEach((p) => {
+      const card = cardEl(p.id);
+      if (card && !results[p.id]) card.querySelector(".kev-text").textContent = `${judge} is checking…`;
+    });
   }
 
   /* ---------- grid rendering ---------- */
@@ -61,66 +92,112 @@ window.Catalog = (() => {
     const grid = document.getElementById("grid");
     products.forEach((p, i) => {
       const el = document.createElement("article");
-      el.className = "card enter";
+      el.className = "card";
       el.id = "card-" + p.id;
       el.dataset.id = p.id;
       el.dataset.cat = p.category || "";
       el.dataset.haystack = (p.title + " " + p.seller + " " + p.category).toLowerCase();
-      el.style.animationDelay = Math.min(i * 40, 500) + "ms";
+      el.style.animationDelay = Math.min(i * 45, 600) + "ms";
       el.innerHTML = `
-        <div class="media tint-${i % 6}">
-          <span class="emoji">${p.icon || "🛍️"}</span>
+        <div class="media">
+          <img src="${esc(p.image)}" alt="${esc(p.title)}" loading="lazy" width="500" height="625">
           <div class="badge-zone"></div>
+          ${hooks.quickAdd ? `<button class="quick-add" type="button">Add to cart</button>` : ""}
         </div>
         <div class="body">
-          <div class="vendor">${esc(p.seller)}</div>
+          <div class="meta-row">
+            <span class="seller">${esc(p.seller)}</span>
+            <span class="stars">★ ${p.rating.toFixed(1)} <i>(${p.reviews.toLocaleString()})</i></span>
+          </div>
           <h3 class="title" title="${esc(p.title)}">${esc(p.title)}</h3>
           <div class="price-row">
-            <span class="price">$${esc(String(p.price))}</span>
-            <span class="cond">${esc(p.condition)}</span>
+            <span class="price">${money(p.price)}</span>
+            ${p.list_price > p.price ? `<s class="list">${money(p.list_price)}</s>` : ""}
+            <span class="cond">· ${esc(p.condition)}</span>
           </div>
-          <div class="analysis">
-            <div class="thinking">
-              <div class="think-row"><span class="spin"></span><span class="think-msg">Reading the listing…</span></div>
-              <div class="skel"><i></i><i></i><i></i></div>
-            </div>
-            <div class="verdict hidden"></div>
+          <div class="kev-line">
+            <span class="meter checking"><i class="m-great_deal"></i><i class="m-fair_price"></i><i class="m-bad_deal"></i></span>
+            <span class="kev-text">${judge} is checking…</span>
           </div>
         </div>`;
-      el.addEventListener("click", () => hooks.onCardClick && hooks.onCardClick(p));
+      el.addEventListener("click", (e) => {
+        if (e.target.closest(".quick-add")) {
+          e.stopPropagation();
+          hooks.quickAdd(p, e.target);
+          return;
+        }
+        hooks.onCardClick && hooks.onCardClick(p);
+      });
       grid.appendChild(el);
-      setBadge(el, "thinking");
+      setChip(el, null);
     });
   }
 
-  function setBadge(card, state) {
-    const zone = card.querySelector(".badge-zone");
-    if (state === "thinking") {
-      zone.innerHTML = `<span class="badge thinking"><span class="mini-spin"></span>evaluating…</span>`;
-    } else if (state === "unsure") {
-      zone.innerHTML = `<span class="badge unsure pop">❓ Not sure</span>`;
+  function setChip(card, r, animate) {
+    const d = display(r);
+    card.querySelector(".badge-zone").innerHTML =
+      `<span class="vchip ${d.cls}${animate ? " pop" : ""}"><i></i>${d.label}</span>`;
+    card.classList.toggle("is-scam", d.cls === "scam");
+    card.dataset.verdict = d.cls;
+  }
+
+  function renderResult(card, r) {
+    setChip(card, r, true);
+    const meter = card.querySelector(".meter");
+    const text = card.querySelector(".kev-text");
+    meter.classList.remove("checking");
+    text.classList.remove("scam");
+    const d = display(r);
+    if (d.cls === "error") {
+      ORDER.forEach((k) => (meter.querySelector(".m-" + k).style.width = "0"));
+      text.textContent = "Couldn’t reach the model";
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      ORDER.forEach((k) => (meter.querySelector(".m-" + k).style.width =
+        Math.round((r.probabilities[k] || 0) * 100) + "%"));
+    }));
+    const top = pct(r.probabilities[r.verdict]);
+    if (d.cls === "scam") {
+      text.classList.add("scam");
+      text.innerHTML = `⚠ <span class="mono">${pct(r.red_flag_prob)}%</span> scam risk`;
+    } else if (d.cls === "unsure") {
+      text.innerHTML = `Unsure · <span class="mono">${top}%</span> ${short(r.verdict)}`;
     } else {
-      zone.innerHTML = `<span class="badge ${state} pop">${VERDICT_BADGES[state]}</span>`;
+      text.innerHTML = `<span class="mono">${top}%</span> <b>${short(r.verdict)}</b>`;
     }
   }
 
-  /* ---------- filters ---------- */
+  function short(v) {
+    return { great_deal: "great deal", fair_price: "fair price", bad_deal: "overpriced" }[v] || v;
+  }
+
+  function resetCard(card) {
+    setChip(card, null);
+    card.querySelector(".meter").classList.add("checking");
+    card.querySelectorAll(".meter i").forEach((i) => (i.style.width = "0"));
+    const text = card.querySelector(".kev-text");
+    text.classList.remove("scam");
+    text.textContent = `${judge} is checking…`;
+  }
+
+  /* ---------- filters + sort ---------- */
 
   function renderChips() {
-    const cats = [...new Set(products.map((p) => p.category).filter(Boolean))];
-    const chips = els.chips;
-    for (const c of ["all", ...cats]) {
+    const counts = {};
+    products.forEach((p) => (counts[p.category] = (counts[p.category] || 0) + 1));
+    for (const c of ["all", ...Object.keys(counts)]) {
       const b = document.createElement("button");
       b.className = "chip" + (c === activeCategory ? " active" : "");
       b.textContent = c === "all" ? "All" : c;
       b.dataset.cat = c;
       b.onclick = () => {
         activeCategory = c;
-        chips.querySelectorAll(".chip").forEach((el) =>
+        els.chips.querySelectorAll(".chip").forEach((el) =>
           el.classList.toggle("active", el.dataset.cat === c));
         applyFilters();
       };
-      chips.appendChild(b);
+      els.chips.appendChild(b);
     }
   }
 
@@ -130,186 +207,139 @@ window.Catalog = (() => {
       const el = cardEl(p.id);
       const inCat = activeCategory === "all" || el.dataset.cat === activeCategory;
       const inSearch = !searchText || el.dataset.haystack.includes(searchText);
-      const show = inCat && inSearch;
+      const hidden = hideBad && ["bad_deal", "scam"].includes(el.dataset.verdict);
+      const show = inCat && inSearch && !hidden;
       el.classList.toggle("filtered", !show);
       if (show) shown++;
     }
     const empty = document.getElementById("empty");
     if (empty) empty.classList.toggle("hidden", shown > 0);
+    if (els.results) {
+      els.results.textContent = `${shown} of ${products.length} listings` +
+        (hideBad ? " · overpriced and flagged listings hidden" : "");
+    }
     updateTally();
+  }
+
+  function dealScore(p) {
+    const r = results[p.id];
+    if (!r || r.error) return -0.5;
+    if (display(r).cls === "scam") return -3;
+    return (r.probabilities.great_deal || 0) - (r.probabilities.bad_deal || 0);
+  }
+
+  function applySort() {
+    const grid = document.getElementById("grid");
+    const order = products.slice();
+    if (sortKey === "deal") order.sort((a, b) => dealScore(b) - dealScore(a));
+    if (sortKey === "price-asc") order.sort((a, b) => a.price - b.price);
+    if (sortKey === "price-desc") order.sort((a, b) => b.price - a.price);
+    order.forEach((p) => {
+      const el = cardEl(p.id);
+      el.style.animation = "none";
+      grid.appendChild(el);
+    });
   }
 
   /* ---------- the scoring queue ---------- */
 
   function onVisible(entries) {
-    if (paused) return;
     for (const e of entries) {
       if (!e.isIntersecting) continue;
-      const id = e.target.dataset.id;
-      if (results[id] || queued.has(id)) continue;
-      enqueue(id);
+      enqueue(e.target.dataset.id);
     }
   }
 
+  /* Score one listing even if it is off screen (used when it lands in the cart). */
+  function check(id) {
+    if (results[id] || queued.has(id)) return;
+    enqueue(id);
+  }
+
   function enqueue(id) {
+    if (paused || results[id] || queued.has(id)) return;
     queued.add(id);
-    scoreQueue.push(id);
-    updateQueueNote();
-    drain();
+    pending.push(id);
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(drain, batchMode ? 60 : 0);
   }
 
   async function drain() {
     if (draining) return;
     draining = true;
-    while (scoreQueue.length) {
-      const id = scoreQueue.shift();
-      updateQueueNote();
-      await scoreCard(id);
+    while (pending.length) {
+      const ids = pending.splice(0, batchMode ? BATCH_MAX : 1);
+      await scoreIds(ids);
     }
     draining = false;
-    updateQueueNote();
   }
 
-  function updateQueueNote() {
-    const note = document.getElementById("queue-note");
-    if (!note) return;
-    const n = scoreQueue.length;
-    note.classList.toggle("hidden", n === 0);
-    if (n) note.textContent = `⏳ ${n} in queue`;
-  }
-
-  /* Kev judges for real in 0.2–0.8 s; demo mode answers instantly.
-     Either way, hold each card in "thinking" long enough to read. */
-  const MIN_THINK_MS = () => 1100 + Math.random() * 700;
-
-  function scoreCard(id) {
-    const p = products.find((x) => x.id === id);
-    const card = cardEl(id);
-    const msgTimer = startThinkMessages(card);
-
-    const waitAll = Promise.all([
-      fetch("/api/score", {
+  async function scoreIds(ids) {
+    const started = performance.now();
+    let list;
+    try {
+      const res = await fetch("/api/score", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id }),
-      }).then((r) => r.json()),
-      new Promise((res) => setTimeout(res, MIN_THINK_MS())),
-    ]);
+        body: JSON.stringify({ ids }),
+      }).then((r) => r.json());
+      if (res.error) throw new Error(res.error);
+      list = res.results;
+    } catch (e) {
+      list = ids.map((id) => ({ id, mode: "error", error: String(e) }));
+    }
+    const wait = MIN_REVEAL_MS - (performance.now() - started);
+    if (batchMode && wait > 0) await new Promise((r) => setTimeout(r, wait));
 
-    return waitAll
-      .then(([r]) => {
-        if (r.error) throw new Error(r.error);
-        results[id] = r;
-        renderVerdict(card, r);
+    list.forEach((r, i) => {
+      const p = products.find((x) => x.id === r.id);
+      results[r.id] = r;
+      queued.delete(r.id);
+      // stagger the reveal a little so a batch reads as a sweep, not a flash
+      setTimeout(() => {
+        if (!results[r.id]) return;   // re-scored in the meantime
+        renderResult(cardEl(r.id), r);
         if (hooks.onResult) hooks.onResult(p, r);
-      })
-      .catch(() => {
-        results[id] = { error: true };
-        card.querySelector(".analysis .thinking").classList.add("hidden");
-        setBadge(card, "unsure");
-        const v = card.querySelector(".verdict");
-        v.classList.remove("hidden");
-        v.innerHTML =
-          `<p class="err">Couldn’t reach the scorer — hit “Re-score all” to retry.</p>`;
-      })
-      .finally(() => {
-        clearInterval(msgTimer);
-        queued.delete(id);
         updateTally();
-      });
-  }
-
-  function startThinkMessages(card) {
-    const msg = card.querySelector(".think-msg");
-    let i = 0;
-    msg.textContent = THINK_STEPS[0];
-    return setInterval(() => {
-      i = (i + 1) % THINK_STEPS.length;
-      msg.textContent = THINK_STEPS[i];
-    }, 550);
-  }
-
-  /* ---------- verdict rendering ---------- */
-
-  function renderVerdict(card, r) {
-    // NB: ".thinking" also matches the waiting badge ("badge thinking"), and the
-    // badge precedes the analysis block in tree order — always scope to .analysis.
-    card.querySelector(".analysis .thinking").classList.add("hidden");
-    setBadge(card, r.confidence < CONFIDENCE_GATE ? "unsure" : r.verdict);
-
-    const v = card.querySelector(".verdict");
-    v.classList.remove("hidden");
-    v.classList.add("reveal");
-
-    const bars = BAR_ORDER.map((k) => {
-      const pct = Math.round((r.probabilities[k] || 0) * 100);
-      return `<div class="bar-row">
-        <span class="bar-name">${BAR_LABELS[k]}</span>
-        <span class="bar-track"><span class="bar-fill ${k}" style="width:0%"></span></span>
-        <span class="bar-pct">${pct}%</span>
-      </div>`;
-    }).join("");
-
-    const unsure = r.confidence < CONFIDENCE_GATE;
-    const chips = [
-      `<span class="chiplet${unsure ? " warn" : ""}">${unsure ? "low confidence" : Math.round(r.confidence * 100) + "% confident"}</span>`,
-      `<span class="chiplet">⚡ ${r.latency_ms} ms</span>`,
-      r.red_flag_prob >= 0.5
-        ? `<span class="chiplet alert">⚠ scam signals ${Math.round(r.red_flag_prob * 100)}%</span>`
-        : `<span class="chiplet">${esc(r.value_label)}</span>`,
-    ].join("");
-
-    v.innerHTML =
-      (unsure ? `<p class="unsure-note">Below the 60% confidence gate — review this one yourself.</p>` : "") +
-      `<div class="bars">${bars}</div><div class="chips">${chips}</div>`;
-
-    // animate fills after paint so the width transition runs
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        v.querySelectorAll(".bar-fill").forEach((f, i) => {
-          const pct = Math.round((r.probabilities[BAR_ORDER[i]] || 0) * 100);
-          f.style.width = pct + "%";
-        });
-      }));
+        if (hideBad) applyFilters();
+        if (sortKey === "deal") applySort();
+      }, batchMode ? i * 55 : 0);
+    });
   }
 
   /* ---------- tally + rescore ---------- */
 
-  function updateTally() {
-    if (!els.countLine) return;
-    const scored = Object.values(results).filter((r) => r && !r.error);
-    const total = products.length;
-    const g = scored.filter((r) => r.verdict === "great_deal").length;
-    const f = scored.filter((r) => r.verdict === "fair_price").length;
-    const b = scored.filter((r) => r.verdict === "bad_deal").length;
-    const u = total - scored.length;
+  function tally() {
+    const t = { total: products.length, scored: 0, great_deal: 0, fair_price: 0, bad_deal: 0, scam: 0, unsure: 0, error: 0 };
+    for (const r of Object.values(results)) {
+      t.scored++;
+      t[display(r).cls]++;
+    }
+    return t;
+  }
 
-    const tally = scored.length
-      ? `${scored.length} evaluated — ${g} great · ${f} fair · ${b} skip`
-      : "none evaluated yet";
-    els.countLine.textContent =
-      `${total} products · ${tally}` + (u ? ` · ${u} to go` : "");
+  function updateTally() {
+    if (hooks.onTally) hooks.onTally(tally());
   }
 
   function rescoreAll() {
     for (const p of products) {
-      const card = cardEl(p.id);
       delete results[p.id];
-      const v = card.querySelector(".verdict");
-      v.classList.add("hidden");
-      v.innerHTML = "";
-      v.classList.remove("reveal");
-      card.querySelector(".analysis .thinking").classList.remove("hidden");
-      setBadge(card, "thinking");
-      // re-enqueue only what's on screen; the observer catches the rest on scroll
-      if (!card.classList.contains("filtered") && isShown(card)) enqueue(p.id);
+      resetCard(cardEl(p.id));
     }
+    queued.clear();
+    pending = [];
+    for (const id of Object.keys(results)) delete results[id];
     updateTally();
+    for (const p of products) {
+      const el = cardEl(p.id);
+      if (!el.classList.contains("filtered") && isShown(el)) enqueue(p.id);
+    }
   }
 
   function isShown(card) {
     const r = card.getBoundingClientRect();
-    return r.bottom > 0 && r.top < window.innerHeight;
+    return r.bottom > -200 && r.top < window.innerHeight + 200;
   }
 
   /* ---------- utils ---------- */
@@ -318,31 +348,37 @@ window.Catalog = (() => {
     return String(s ?? "").replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
-
-  /* ---------- public API ---------- */
-
+  function money(n) { return "$" + Number(n).toLocaleString(); }
+  function pct(x) { return Math.round((x || 0) * 100); }
   function cardEl(id) { return document.getElementById("card-" + id); }
 
   return {
     init,
+    setEngine,
+    check,
+    judge: () => judge,
     rescoreAll,
-    updateTally,
     cardEl,
+    display,
+    tally,
+    esc,
+    money,
+    pct,
     setPaused(v) {
       paused = v;
       if (!v) {
-        // score whatever is on screen now — the observer only fires on changes
+        // score whatever is on screen now; the observer only fires on changes
         for (const p of products) {
           const el = cardEl(p.id);
-          if (!results[p.id] && !queued.has(p.id) && !el.classList.contains("filtered") && isShown(el)) {
-            enqueue(p.id);
-          }
+          if (!el.classList.contains("filtered") && isShown(el)) enqueue(p.id);
         }
       }
     },
     products: () => products,
+    product: (id) => products.find((p) => p.id === id),
     results,             // live object: id -> response
     CONFIDENCE_GATE,
+    RED_FLAG_GATE,
     VERDICT_BADGES,
   };
 })();
