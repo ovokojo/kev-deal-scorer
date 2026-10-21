@@ -1,5 +1,5 @@
 """Metrics for scripts/bench.py. ECE and the paired bootstrap are copied from the
-fine-tuning tutorial (~/Desktop/test/fine-tuning/lib/calibrate.py) so this repo stays
+fine-tuning tutorial (fine-tuning/lib/calibrate.py) so this repo stays
 self-contained; the bootstrap here takes per-row correctness instead of predictions."""
 import numpy as np
 

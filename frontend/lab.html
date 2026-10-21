@@ -63,11 +63,11 @@
       <h3>Waiting for a live model</h3>
       <p>This page only runs real lessons, with no heuristic stand-in. Start an engine in another
       terminal. Laya is the fast default; Kev is the generative-model baseline.</p>
-      <pre class="cmd">cd ~/Desktop/test/kev-deal-scorer/laya-server
+      <pre class="cmd">cd laya-server
 uv run serve.py --model ../models/laya-deals
 
-# or Kev 0.8B on the Apple GPU:
-cd ~/Desktop/test/kev
+# or Kev 0.8B on the Apple GPU (first time: git submodule update --init kev):
+cd kev
 KEV_DTYPE=bf16 uv run --extra serve python -m kev.serve \
   --run jaredpalmer/kev-0.8b --port 8009</pre>
       <p class="gate-status"><span class="spin"></span> polling for an engine every 3 s…</p>
