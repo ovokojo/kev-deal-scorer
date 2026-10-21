@@ -106,6 +106,13 @@ scores a perfect 1.000 by construction. That is the ceiling, not a baseline, and
 number here is measured against human judgement. A human-labelled set is the piece this
 project still lacks. [docs/benchmark.md](docs/benchmark.md) says so next to the numbers.
 
+For background on how a fine-tune like `finetune_laya.py` works, see
+[fine-tuning/](fine-tuning/README.md), a hands-on tutorial that runs on an Apple Silicon
+Mac. It fine-tunes a ModernBERT encoder classifier (the kind of model Laya is) and a LoRA
+decision model on Qwen3-0.6B (the approach Kev takes), then calibrates and serves both.
+The notebooks are committed with their outputs, so you can read them without running
+anything.
+
 ## Project layout
 
 ```
