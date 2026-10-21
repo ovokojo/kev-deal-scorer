@@ -66,7 +66,8 @@ uv run serve.py --model ../models/laya-deals      # the fine-tuned checkpoint
 **Kev, the generative baseline:**
 
 ```bash
-cd ~/Desktop/test/kev
+git submodule update --init kev    # once: kev/ is a submodule of jaredpalmer/kev
+cd kev
 KEV_DTYPE=bf16 uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b --port 8009
 ```
 
@@ -124,6 +125,8 @@ kev-deal-scorer/
 ├── scripts/           # make_eval, bench, finetune_laya, metrics
 ├── data/              # catalog, eval splits, photo credits
 ├── docs/benchmark.md
+├── kev/               # submodule: jaredpalmer/kev, the Kev engine
+├── fine-tuning/       # tutorial notebooks: fine-tuning small decision models on a Mac
 └── run.sh
 ```
 

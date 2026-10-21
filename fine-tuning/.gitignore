@@ -1,0 +1,14 @@
+# Generated data and trained artifacts. Everything here is reproducible by running the
+# notebooks in order, and together they run to a few gigabytes — not something to commit.
+data/
+models/
+adapters/
+
+# The notebooks and .py sources ARE committed, including their outputs, so the tutorial can
+# be read without running anything.
+
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
